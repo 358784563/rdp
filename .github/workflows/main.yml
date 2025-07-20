@@ -1,47 +1,75 @@
-name: Jor3a-Ti9niya-RDP
+name: Working-VNC-RDP
 on:
   workflow_dispatch:
 jobs:
-  setup-rdp-tunnel:
+  setup-vnc:
     runs-on: windows-latest
     steps:
-    - name: Check out the repository
+    - name: Checkout
       uses: actions/checkout@v2
-    - name: Download and Install Playit
+      
+    - name: Download Playit
       run: |
         Invoke-WebRequest -Uri "https://github.com/playit-cloud/playit-agent/releases/download/v0.15.26/playit-windows-x86_64-signed.exe" -OutFile "$env:USERPROFILE\playit.exe"
-        Start-Sleep -Seconds 5
         
-    - name: Enable TS
-      run: Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server'-name "fDenyTSConnections" -Value 0
-    - run: Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-    - run: Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 1
-    - run: Set-LocalUser -Name "runneradmin" -Password (ConvertTo-SecureString -AsPlainText "admin@123" -Force)
-    
-    # الحل الجديد - منع قطع الجلسة
-    - name: Configure Session Settings to Prevent Disconnection
+    - name: Setup Windows User
       run: |
-        # منع قطع الجلسة عند قطع الاتصال
-        Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'fInheritMaxSessionTime' -Value 0
-        Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'MaxConnectionTime' -Value 0
-        Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'MaxDisconnectionTime' -Value 0
-        Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'MaxIdleTime' -Value 0
+        Set-LocalUser -Name "runneradmin" -Password (ConvertTo-SecureString -AsPlainText "admin@123" -Force)
         
-        # منع النوم والسكريين سيفر
-        powercfg -change -standby-timeout-ac 0
-        powercfg -change -standby-timeout-dc 0
-        powercfg -change -monitor-timeout-ac 0
-        powercfg -change -monitor-timeout-dc 0
-        powercfg -change -hibernate-timeout-ac 0
-        powercfg -change -hibernate-timeout-dc 0
-    
-    - name: www.toolboxlap.com
+    - name: Install and Configure TightVNC Server
+      run: |
+        # تحميل TightVNC Server
+        Invoke-WebRequest -Uri "https://www.tightvnc.com/download/2.8.63/tightvnc-2.8.63-gpl-setup-64bit.msi" -OutFile "tightvnc.msi"
+        
+        # تثبيت TightVNC بإعدادات محددة
+        Start-Process msiexec.exe -Wait -ArgumentList '/i', 'tightvnc.msi', 'ADDLOCAL=Server', 'SERVER_REGISTER_AS_SERVICE=1', 'SERVER_ADD_FIREWALL_EXCEPTION=1', 'SET_USEVNCAUTHENTICATION=1', 'VALUE_OF_USEVNCAUTHENTICATION=1', 'SET_PASSWORD=1', 'VALUE_OF_PASSWORD=vnc123', 'SET_USECONTROLAUTHENTICATION=1', 'VALUE_OF_USECONTROLAUTHENTICATION=1', 'SET_CONTROLPASSWORD=1', 'VALUE_OF_CONTROLPASSWORD=admin123', '/quiet'
+        
+        # التأكد من تشغيل الخدمة
+        Start-Sleep -Seconds 10
+        Restart-Service "tvnserver" -Force
+        Get-Service "tvnserver"
+        
+    - name: Configure Firewall
+      run: |
+        New-NetFirewallRule -DisplayName "VNC-In" -Direction Inbound -Protocol TCP -LocalPort 5900 -Action Allow
+        
+    - name: Test VNC Server
+      run: |
+        # التحقق من أن VNC Server يعمل
+        netstat -an | findstr ":5900"
+        Get-Process | Where-Object {$_.Name -like "*vnc*"}
+        
+    - name: Start Playit Tunnel
       env:
-        PLAYIT_AUTH_KEY: ${{ secrets.PL }} 
+        PLAYIT_AUTH_KEY: ${{ secrets.PL }}
       run: |
         Start-Process -FilePath "$env:USERPROFILE\playit.exe" -ArgumentList "--secret $env:PLAYIT_AUTH_KEY" -NoNewWindow -Wait
-        Start-Process -FilePath "$env:USERPROFILE\playit.exe" -NoNewWindow
+        Start-Process -FilePath "$env:USERPROFILE\playit.exe" -NoNewWindow -PassThru
         
-    - name: Keep the GitHub Action Runner Alive
+        # انتظار لبدء النفق
+        Start-Sleep -Seconds 30
+        
+        # عرض معلومات الاتصال
+        Write-Host "=== VNC Server Information ==="
+        Write-Host "Port: 5900"
+        Write-Host "Password: vnc123"
+        Write-Host "Admin Password: admin123"
+        Write-Host "================================"
+        
+    - name: Keep Alive
       run: |
-          Start-Sleep -Seconds 21600
+        # إبقاء النظام نشطاً
+        while ($true) {
+          Write-Host "VNC Server is running... $(Get-Date)"
+          Start-Sleep -Seconds 300  # كل 5 دقائق
+          
+          # التحقق من VNC Server
+          $vncProcess = Get-Process -Name "winvnc" -ErrorAction SilentlyContinue
+          if (-not $vncProcess) {
+            Write-Host "Restarting VNC Server..."
+            Restart-Service "tvnserver" -Force
+          }
+          
+          # منع النوم
+          [System.Windows.Forms.SendKeys]::SendWait("{F15}")
+        }
